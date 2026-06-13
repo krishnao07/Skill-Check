@@ -1,14 +1,81 @@
-import Link from "next/link";
-import { CheckCircle2, Mic, Video } from "lucide-react";
+"use client";
+
+import { useCallback, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { CheckCircle2, Circle, Loader2, Mic } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { MediaPreview } from "@/components/media-preview";
+import { MicLevelMeter } from "@/components/mic-level-meter";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
-import { StatusBadge } from "@/components/status-badge";
-import { readinessItems, waitingTips } from "@/lib/mock-data";
+import { useMediaDevices } from "@/hooks/use-media-devices";
+import { waitingTips } from "@/lib/mock-data";
 
 export default function WaitingRoomPage() {
+  const router = useRouter();
+  const [audioActivityDetected, setAudioActivityDetected] = useState(false);
+  const {
+    status,
+    errorMessage,
+    stream,
+    videoDevices,
+    audioDevices,
+    selectedCameraId,
+    selectedMicrophoneId,
+    requestMedia,
+    switchCamera,
+    switchMicrophone,
+    cleanup,
+  } = useMediaDevices();
+
+  const isRequesting = status === "requesting";
+  const hasCamera = Boolean(stream?.getVideoTracks().some((track) => track.readyState === "live"));
+  const hasMicrophone = Boolean(
+    stream?.getAudioTracks().some((track) => track.readyState === "live"),
+  );
+  const canJoin = hasCamera && hasMicrophone && status === "ready";
+
+  const readinessItems = useMemo(
+    () => [
+      { label: "Camera ready", ready: hasCamera },
+      { label: "Microphone ready", ready: hasMicrophone },
+      { label: "Audio activity detected", ready: audioActivityDetected },
+      { label: "Recording will be enabled in next step", ready: canJoin },
+      { label: "AI interviewer ready placeholder", ready: true },
+    ],
+    [audioActivityDetected, canJoin, hasCamera, hasMicrophone],
+  );
+
+  const handleAudioActivityChange = useCallback((active: boolean) => {
+    setAudioActivityDetected((previous) => previous || active);
+  }, []);
+
+  const handleEnableMedia = async () => {
+    setAudioActivityDetected(false);
+    await requestMedia();
+  };
+
+  const handleCameraChange = async (cameraId: string) => {
+    setAudioActivityDetected(false);
+    await switchCamera(cameraId);
+  };
+
+  const handleMicrophoneChange = async (microphoneId: string) => {
+    setAudioActivityDetected(false);
+    await switchMicrophone(microphoneId);
+  };
+
+  const handleJoinInterview = () => {
+    if (!canJoin) {
+      return;
+    }
+
+    cleanup();
+    router.push("/interview/live");
+  };
+
   return (
     <AppShell>
       <div className="grid gap-6 lg:grid-cols-[1fr_390px]">
@@ -21,15 +88,7 @@ export default function WaitingRoomPage() {
           <div className="grid gap-4 md:grid-cols-2">
             <Card className="overflow-hidden">
               <CardContent className="p-0">
-                <div className="flex min-h-96 flex-col justify-between bg-slate-950 p-5 text-white">
-                  <StatusBadge tone="green" className="w-fit bg-white/10 text-white ring-white/20">
-                    Camera ready
-                  </StatusBadge>
-                  <div className="mx-auto flex h-28 w-28 items-center justify-center rounded-full bg-white/10">
-                    <Video className="h-10 w-10" />
-                  </div>
-                  <p className="text-sm text-white/65">Camera preview placeholder</p>
-                </div>
+                <MediaPreview stream={stream} isReady={hasCamera} />
               </CardContent>
             </Card>
             <Card>
@@ -37,18 +96,50 @@ export default function WaitingRoomPage() {
                 <CardTitle>Device settings</CardTitle>
               </CardHeader>
               <CardContent className="space-y-5">
+                {status === "idle" ? (
+                  <Button
+                    className="w-full"
+                    onClick={handleEnableMedia}
+                    disabled={isRequesting}
+                  >
+                    Enable Camera & Microphone
+                  </Button>
+                ) : null}
+
                 <label className="grid gap-2 text-sm font-medium text-slate-700">
                   Camera device
-                  <Select defaultValue="FaceTime HD Camera">
-                    <option>FaceTime HD Camera</option>
-                    <option>External USB Camera</option>
+                  <Select
+                    value={selectedCameraId}
+                    disabled={!hasCamera || isRequesting}
+                    onChange={(event) => void handleCameraChange(event.target.value)}
+                  >
+                    {videoDevices.length > 0 ? (
+                      videoDevices.map((device, index) => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Camera ${index + 1}`}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">No camera available</option>
+                    )}
                   </Select>
                 </label>
                 <label className="grid gap-2 text-sm font-medium text-slate-700">
                   Microphone device
-                  <Select defaultValue="Default microphone">
-                    <option>Default microphone</option>
-                    <option>USB microphone</option>
+                  <Select
+                    value={selectedMicrophoneId}
+                    disabled={!hasMicrophone || isRequesting}
+                    onChange={(event) => void handleMicrophoneChange(event.target.value)}
+                  >
+                    {audioDevices.length > 0 ? (
+                      audioDevices.map((device, index) => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Microphone ${index + 1}`}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">No microphone available</option>
+                    )}
                   </Select>
                 </label>
                 <div>
@@ -56,16 +147,34 @@ export default function WaitingRoomPage() {
                     <Mic className="h-4 w-4" />
                     Microphone level
                   </div>
-                  <div className="flex gap-1">
-                    {[45, 72, 60, 88, 54, 35, 66, 78].map((height) => (
-                      <span
-                        key={height}
-                        className="w-full rounded-full bg-cyan-500"
-                        style={{ height: `${height}px` }}
-                      />
-                    ))}
-                  </div>
+                  <MicLevelMeter
+                    stream={stream}
+                    onActivityChange={handleAudioActivityChange}
+                  />
                 </div>
+
+                {isRequesting ? (
+                  <div className="flex items-center gap-2 rounded-lg border bg-slate-50 p-3 text-sm text-slate-600">
+                    <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />
+                    Waiting for camera and microphone permission...
+                  </div>
+                ) : null}
+
+                {errorMessage ? (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-700">
+                    {errorMessage}
+                  </div>
+                ) : null}
+
+                {status !== "idle" && status !== "requesting" && status !== "ready" ? (
+                  <Button
+                    variant="secondary"
+                    className="w-full"
+                    onClick={handleEnableMedia}
+                  >
+                    Try again
+                  </Button>
+                ) : null}
               </CardContent>
             </Card>
           </div>
@@ -78,9 +187,13 @@ export default function WaitingRoomPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {readinessItems.map((item) => (
-                <div key={item} className="flex items-center gap-3 text-sm text-slate-700">
-                  <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                  {item}
+                <div key={item.label} className="flex items-center gap-3 text-sm text-slate-700">
+                  {item.ready ? (
+                    <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                  ) : (
+                    <Circle className="h-5 w-5 text-slate-300" />
+                  )}
+                  {item.label}
                 </div>
               ))}
             </CardContent>
@@ -96,10 +209,16 @@ export default function WaitingRoomPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {waitingTips.map((tip) => (
-                <p key={tip} className="text-sm text-slate-600">{tip}</p>
+                <p key={tip} className="text-sm text-slate-600">
+                  {tip}
+                </p>
               ))}
-              <Button asChild className="w-full">
-                <Link href="/interview/live">Join Interview</Link>
+              <Button
+                className="w-full"
+                disabled={!canJoin}
+                onClick={handleJoinInterview}
+              >
+                Join Interview
               </Button>
             </CardContent>
           </Card>
